@@ -150,9 +150,9 @@ int popfile(void)
 ### **Salida Esperada:**
 
 **main.txt**  
-![][image1]  
+![Salida 1](img/Captura%20desde%202026-03-04%2000-38-58.png)
 **main\_erroneo.txt**  
-![][image2]
+![Salida 2](img/Captura%20desde%202026-03-04%2000-39-44.png)
 
 ### **Cómo Compilar:**
 
@@ -231,7 +231,7 @@ lookup(char\* sym)
 }  
 ```
 **Salida Esperada**  
-![][image3]
+![Salida 3](img/Captura%20desde%202026-03-04%2000-40-19.png)
 
 ### **Cómo Compilar:**
 
