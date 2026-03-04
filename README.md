@@ -10,6 +10,8 @@ Universidad Sergio Arboleda
 
 2026, Bogotá D.C
 
+
+
 **Objetivo General:**
 
 Desarrollar y validar un conjunto de analizadores léxicos con Flex que repliquen los ejemplos 2-1 a 2-5 del capítulo número 2, aplicando técnicas de lectura de archivos, estados de inicio (start states), manejo de archivos anidados con \#include, generación de concordancias y referencias cruzadas.
