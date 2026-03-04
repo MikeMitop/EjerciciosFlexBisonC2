@@ -1,0 +1,4 @@
+A linea 1
+A linea 2
+
+A linea 4 (despues de vacia)

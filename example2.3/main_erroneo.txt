@@ -1,0 +1,3 @@
+Linea 1
+#include a.txt
+Linea 3

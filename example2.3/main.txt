@@ -1,0 +1,7 @@
+Linea 1 del main
+
+#include "a.txt"
+Linea 4 del main
+
+#include "b.txt"
+Linea final del main
