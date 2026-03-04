@@ -1,176 +1,339 @@
-/* fb2-5.l - C cross-referencer (basic) */
 %option noyywrap nodefault yylineno
+
 %x COMMENT
+%x IFILE
+
+UCN   (\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8})
+EXP   ([Ee][-+]?[0-9]+)
+ILEN  ([Uu](L|l|LL|ll)?|(L|l|LL|ll)[Uu]?)
 
 %{
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 struct ref {
     struct ref *next;
     char *filename;
+    int flags;
     int lineno;
 };
 
 struct symbol {
-    struct symbol *next;
-    char *name;
     struct ref *reflist;
+    char *name;
+    struct symbol *next;
 };
 
-#define NHASH 20011
+#define NHASH 9997
 static struct symbol *symtab[NHASH];
 
-static unsigned symhash(const char *s);
-static struct symbol *lookup(const char *name);
-static void addref(struct symbol *sym, const char *filename, int lineno);
-static void dump(void);
+static unsigned symhash(const char *sym);
+static struct symbol *lookup(const char *sym);
+static void addref(int lineno, char *filename, const char *word, int flags);
 
-static const char *curfilename = "<stdin>";
+static int symcount(void);
+static int symcompare(const void *xa, const void *xb);
+static void printrefs(void);
+
+static char *curfilename;
+
+struct bufstack {
+    struct bufstack *prev;
+    YY_BUFFER_STATE bs;
+    int lineno;
+    char *filename;
+    FILE *f;
+} *curbs = 0;
+
+static int newfile(char *fn);
+static int popfile(void);
+
+static int defining;
 %}
 
-/* patterns */
-IDSTART     [A-Za-z_]
-IDREST      [A-Za-z0-9_]
-ID          {IDSTART}{IDREST}*
-
 %%
-/* ---- skip whitespace ---- */
-[ \t\r]+                {}
+"/*"                      { BEGIN(COMMENT); }
+<COMMENT>"*/"             { BEGIN(INITIAL); }
+<COMMENT>([^*]|\n)+|.      { }
+<COMMENT><<EOF>>           { printf("%s:%d: Unterminated comment\n", curfilename, yylineno); return 0; }
 
-/* ---- newlines ---- */
-\n                      {}
+"//".*\n                   { }
 
-/* ---- comments ---- */
-"/*"                    { BEGIN(COMMENT); }
-<COMMENT>"*/"           { BEGIN(INITIAL); }
-<COMMENT>\n             {}
-<COMMENT>.              {}
+_Bool |
+_Complex |
+_Imaginary |
+auto |
+char |
+const |
+double |
+enum |
+extern |
+float |
+inline |
+int |
+long |
+register |
+restrict |
+short |
+signed |
+static |
+struct |
+typedef |
+union |
+unsigned |
+void |
+volatile                   { defining = 1; }
 
-"//"[^\n]*              {}
+break |
+case |
+continue |
+default |
+do |
+else |
+for |
+goto |
+if |
+return |
+sizeof |
+switch |
+while                      { }
 
-/* ---- strings and chars (skip) ---- */
-\"([^\\\n]|\\.)*\"      {}
-\'([^\\\n]|\\.)*\'      {}
+0[0-7]*{ILEN}?             { }
+[1-9][0-9]*{ILEN}?         { }
+0[Xx][0-9a-fA-F]+{ILEN}?   { }
 
-/* ---- preprocessor line (skip whole line) ---- */
-^[ \t]*\#[^\n]*         {}
+([0-9]*\.[0-9]+|[0-9]+\.){EXP}?[flFL]?  { }
+[0-9]+{EXP}[flFL]?                      { }
 
-/* ---- identifiers ---- */
-{ID}                    {
-                            struct symbol *s = lookup(yytext);
-                            addref(s, curfilename, yylineno);
-                        }
+0[Xx]([0-9a-fA-F]*\.[0-9a-fA-F]+|[0-9a-fA-F]+\.?)[Pp][-+]?[0-9]+[flFL]?  { }
 
-/* ---- anything else ---- */
-.                       {}
-%%
+\'([^'\\]|\\['"?\\abfnrtv]|\\[0-7]{1,3}|\\[Xx][0-9a-fA-F]+|{UCN})+\'      { }
 
-int main(int argc, char **argv) {
-    int i;
+L?\"([^"\\]|\\['"?\\abfnrtv]|\\[0-7]{1,3}|\\[Xx][0-9a-fA-F]+|{UCN})*\"    { }
 
-    if (argc < 2) {
-        yylex();
-        dump();
-        return 0;
-    }
+"{"|"<%"|";"               { defining = 0; }
 
-    for (i = 1; i < argc; i++) {
-        FILE *f = fopen(argv[i], "r");
-        if (!f) { perror(argv[i]); return 1; }
-        curfilename = argv[i];
-        yyrestart(f);
-        yylex();
-        fclose(f);
-    }
+"["|"]"|"("|")"|"{"|"}"|"."|"->"         { }
+"++"|"--"|"&"|"*"|"+"|"-"|"~"|"!"        { }
+"/"|"%"|"<<"|">>"                        { }
+"<"|">"|"<="|">="                        { }
+"=="|"!="                                { }
+"^"|"|"|"&&"|"||"                        { }
+"?"|":"|"..."
+"="|"*="|"/="|"%="|"+="|"-="|"<<="|">>="|"&="|"^="|"|="  { }
+","|"#"|"##"                             { }
+"<:"|":>"|"%>"|"%:"|"%:%:"               { }
 
-    dump();
-    return 0;
+([_a-zA-Z]|{UCN})([_a-zA-Z0-9]|{UCN})*   { addref(yylineno, curfilename, yytext, defining); }
+
+[ \t\n]+                  { }
+\\$                        { }
+
+"#"" "*if.*\n              { }
+"#"" "*else.*\n            { }
+"#"" "*endif.*\n           { }
+"#"" "*define.*\n          { }
+"#"" "*line.*\n            { }
+
+^"#"[ \t]*include[ \t]*[\"<]   { BEGIN(IFILE); }
+
+<IFILE>[^>\"]+ {
+    int c;
+    while ((c = input()) && c != '\n') ;
+    newfile(strdup(yytext));
+    BEGIN(INITIAL);
 }
 
-/* ---- symbol table (chaining) ---- */
-static unsigned symhash(const char *s) {
-    unsigned h = 0;
-    while (*s) {
-        unsigned char c = (unsigned char)*s++;
-        h = (h * 33u) ^ (unsigned)c;
-    }
-    return h % NHASH;
+<IFILE>.|\n {
+    fprintf(stderr, "%s:%d bad include line\n", curfilename, yylineno);
+    BEGIN(INITIAL);
 }
 
-static struct symbol *lookup(const char *name) {
-    unsigned h = symhash(name);
-    struct symbol *sp = symtab[h];
+<<EOF>>                    { if (!popfile()) yyterminate(); }
 
-    while (sp) {
-        if (strcmp(sp->name, name) == 0) return sp;
-        sp = sp->next;
+. {
+    printf("%s:%d: Mystery character '%s'\n", curfilename, yylineno, yytext);
+}
+%%
+
+static unsigned
+symhash(const char *sym)
+{
+    unsigned int hash = 0;
+    unsigned c;
+    while ((c = (unsigned char)*sym++)) hash = hash * 9u ^ c;
+    return hash;
+}
+
+static struct symbol *
+lookup(const char *sym)
+{
+    unsigned h = symhash(sym) % NHASH;
+    struct symbol *sp;
+
+    for (sp = symtab[h]; sp; sp = sp->next) {
+        if (sp->name && strcmp(sp->name, sym) == 0) return sp;
     }
 
-    sp = (struct symbol*)calloc(1, sizeof(*sp));
-    if (!sp) { perror("calloc"); exit(1); }
+    sp = (struct symbol *)malloc(sizeof(*sp));
+    if (!sp) { perror("malloc"); exit(1); }
 
-    sp->name = strdup(name);
+    sp->name = strdup(sym);
     if (!sp->name) { perror("strdup"); exit(1); }
 
+    sp->reflist = 0;
     sp->next = symtab[h];
     symtab[h] = sp;
     return sp;
 }
 
-static void addref(struct symbol *sym, const char *filename, int lineno) {
-    struct ref *r = (struct ref*)malloc(sizeof(*r));
-    if (!r) { perror("malloc"); exit(1); }
+static void
+addref(int lineno, char *filename, const char *word, int flags)
+{
+    struct ref *r;
+    struct symbol *sp = lookup(word);
 
-    r->filename = strdup(filename);
-    if (!r->filename) { perror("strdup"); exit(1); }
+    if (sp->reflist &&
+        sp->reflist->lineno == lineno &&
+        sp->reflist->filename == filename) return;
 
+    r = (struct ref *)malloc(sizeof(*r));
+    if (!r) { fputs("out of space\n", stderr); abort(); }
+
+    r->next = sp->reflist;
+    r->filename = filename;
     r->lineno = lineno;
-    r->next = sym->reflist;
-    sym->reflist = r;
+    r->flags = flags;
+    sp->reflist = r;
 }
 
-static int symcount(void) {
-    int n = 0, i;
+static int
+symcount(void)
+{
+    int i, n = 0;
     for (i = 0; i < NHASH; i++) {
-        struct symbol *sp = symtab[i];
-        while (sp) { n++; sp = sp->next; }
+        struct symbol *sp;
+        for (sp = symtab[i]; sp; sp = sp->next) n++;
     }
     return n;
 }
 
-static int cmp_sym_ptr(const void *a, const void *b) {
-    const struct symbol *sa = *(const struct symbol * const *)a;
-    const struct symbol *sb = *(const struct symbol * const *)b;
-    return strcmp(sa->name, sb->name);
+static int
+symcompare(const void *xa, const void *xb)
+{
+    const struct symbol *a = *(const struct symbol * const *)xa;
+    const struct symbol *b = *(const struct symbol * const *)xb;
+    return strcmp(a->name, b->name);
 }
 
-static void dump(void) {
-    int n = symcount();
-    int i, k = 0;
-    struct symbol **arr = (struct symbol**)malloc(sizeof(*arr) * (size_t)n);
+static void
+printrefs(void)
+{
+    int i, n = symcount(), k = 0;
+    struct symbol **arr;
+
+    arr = (struct symbol **)malloc(sizeof(*arr) * (size_t)n);
     if (!arr) { perror("malloc"); exit(1); }
 
     for (i = 0; i < NHASH; i++) {
-        struct symbol *sp = symtab[i];
-        while (sp) { arr[k++] = sp; sp = sp->next; }
+        struct symbol *sp;
+        for (sp = symtab[i]; sp; sp = sp->next) arr[k++] = sp;
     }
 
-    qsort(arr, (size_t)n, sizeof(*arr), cmp_sym_ptr);
+    qsort(arr, (size_t)n, sizeof(*arr), symcompare);
 
     for (i = 0; i < n; i++) {
-        struct symbol *sp = arr[i];
-        struct ref *r = sp->reflist;
+        char *prevfn = NULL;
+        struct ref *rp = arr[i]->reflist;
+        struct ref *rpp = 0;
+        struct ref *rpn;
 
-        printf("%s:", sp->name);
-        while (r) {
-            printf(" %s:%d", r->filename, r->lineno);
-            r = r->next;
+        while (rp) {
+            rpn = rp->next;
+            rp->next = rpp;
+            rpp = rp;
+            rp = rpn;
+        }
+
+        printf("%10s", arr[i]->name);
+        for (rp = rpp; rp; rp = rp->next) {
+            if (rp->filename == prevfn) {
+                printf(" %d", rp->lineno);
+            } else {
+                printf(" %s:%d", rp->filename, rp->lineno);
+                prevfn = rp->filename;
+            }
+            if (rp->flags & 01) printf("*");
         }
         printf("\n");
     }
 
     free(arr);
+}
+
+static int
+newfile(char *fn)
+{
+    FILE *f = fopen(fn, "r");
+    struct bufstack *bs;
+
+    if (!f) { perror(fn); free(fn); return 0; }
+
+    bs = (struct bufstack *)malloc(sizeof(*bs));
+    if (!bs) { perror("malloc"); exit(1); }
+
+    if (curbs) curbs->lineno = yylineno;
+
+    bs->prev = curbs;
+    bs->bs = yy_create_buffer(f, YY_BUF_SIZE);
+    bs->f = f;
+    bs->filename = fn;              /* <-- aquí ya NO strdup */
+    yy_switch_to_buffer(bs->bs);
+    curbs = bs;
+
+    yylineno = 1;
+    curfilename = bs->filename;     /* <-- como te dije */
+    return 1;
+}
+
+static int
+popfile(void)
+{
+    struct bufstack *bs = curbs;
+    struct bufstack *prevbs;
+
+    if (!bs) return 0;
+
+    fclose(bs->f);
+    yy_delete_buffer(bs->bs);
+
+    prevbs = bs->prev;
+    free(bs->filename);
+    free(bs);
+
+    if (!prevbs) return 0;
+
+    yy_switch_to_buffer(prevbs->bs);
+    curbs = prevbs;
+
+    yylineno = curbs->lineno;
+    curfilename = curbs->filename;
+    return 1;
+}
+
+int
+main(int argc, char **argv)
+{
+    int i;
+    if (argc < 2) {
+        fprintf(stderr, "need filename\n");
+        return 1;
+    }
+    for (i = 1; i < argc; i++) {
+        if (newfile(strdup(argv[i])))
+            yylex();
+    }
+    printrefs();
+    return 0;
 }
